@@ -1,0 +1,173 @@
+// ============================================================
+//  chess-ui — Pseudo Code  (React + TypeScript)
+//  Covers: types, gameApi, engineHub, App, components
+// ============================================================
+
+
+// ── Types ────────────────────────────────────────────────────
+ENUM PlayerColor   { White, Black }
+ENUM GameStatus    { InProgress, Checkmate, Stalemate, Draw, Resigned }
+
+INTERFACE AnalysisLine:
+    depth  : number
+    score  : number       // centipawns
+    nodes  : number
+    timeMs : number
+    pv     : string       // principal variation (space-separated UCI moves)
+
+INTERFACE GameState:
+    gameId      : string
+    fen         : string
+    status      : GameStatus
+    playerColor : PlayerColor
+    moveHistory : string[]
+
+
+// ── gameApi  (REST client) ────────────────────────────────────
+MODULE gameApi:
+    BASE_URL = "http://localhost:5000/api"
+
+    FUNCTION startGame(playerColor: PlayerColor) → Promise<StartGameResponse>:
+        RETURN POST `${BASE_URL}/game/start`, body: { playerColor }
+
+    FUNCTION makeMove(gameId: string, move: string) → Promise<MakeMoveResponse>:
+        // move is UCI notation e.g. "e2e4"
+        RETURN POST `${BASE_URL}/game/move`, body: { gameId, move }
+
+    FUNCTION resignGame(gameId: string) → Promise<GameStateResponse>:
+        RETURN POST `${BASE_URL}/game/${gameId}/resign`
+
+
+// ── engineHub  (SignalR client) ───────────────────────────────
+CLASS EngineHub:
+    connection : HubConnection
+
+    FUNCTION connect() → Promise<void>:
+        connection = new HubConnectionBuilder()
+            .withUrl("/hubs/engine")
+            .withAutomaticReconnect()
+            .build()
+
+        connection.on("searchProgress", (data: AnalysisLine) =>
+            emit("progress", data)
+        )
+        connection.on("bestMove", (data: { move, score }) =>
+            emit("bestMove", data)
+        )
+        connection.on("searchError", (data: { message }) =>
+            emit("error", data)
+        )
+
+        AWAIT connection.start()
+
+    FUNCTION analyze(fen: string, depth = 20, timeMs = 5000):
+        AWAIT connection.invoke("FindBestMove", fen, depth, timeMs)
+
+    FUNCTION disconnect():
+        AWAIT connection.stop()
+
+
+// ── App  (root component) ─────────────────────────────────────
+COMPONENT App:
+
+    // State
+    screen        : "setup" | "game"   = "setup"
+    gameId        : string | null      = null
+    fen           : string             = STARTING_FEN
+    playerColor   : PlayerColor        = White
+    gameStatus    : GameStatus         = InProgress
+    moveHistory   : string[]           = []
+    analysisLines : AnalysisLine[]     = []
+    isAIThinking  : bool               = false
+
+    ON mount:
+        hub.connect()
+
+    ON unmount:
+        hub.disconnect()
+
+    FUNCTION handleColorSelect(color: PlayerColor):
+        playerColor = color
+        response    = AWAIT gameApi.startGame(color)
+        gameId      = response.gameId
+        fen         = response.fen
+        screen      = "game"
+        // If player chose Black, AI already played first move → update fen
+
+    FUNCTION handlePlayerMove(sourceSquare, targetSquare):
+        IF gameStatus != InProgress OR isAIThinking: RETURN
+
+        uciMove = sourceSquare + targetSquare   // e.g. "e2e4"
+        // Promotion: append piece letter if pawn reaches back rank
+
+        response = AWAIT gameApi.makeMove(gameId, uciMove)
+
+        IF response.error:
+            // Move rejected (illegal) — reset board to last valid FEN
+            RETURN
+
+        fen         = response.aiFen OR response.fen
+        gameStatus  = response.status
+        moveHistory = response.moveHistory
+
+        IF response.aiMove:
+            isAIThinking = false
+            // Trigger analysis of the new position
+            hub.analyze(fen)
+
+    FUNCTION handleResign():
+        AWAIT gameApi.resignGame(gameId)
+        gameStatus = Resigned
+
+    SUBSCRIBE hub "progress":
+        (line: AnalysisLine) =>
+            analysisLines = [...analysisLines, line]   // append latest depth result
+
+    SUBSCRIBE hub "bestMove":
+        ({ move, score }) =>
+            isAIThinking = false
+
+    RENDER:
+        IF screen == "setup":
+            RENDER ColorSelectionScreen(onSelect: handleColorSelect)
+        ELSE:
+            RENDER GameScreen:
+                Chessboard(
+                    fen           = fen
+                    orientation   = playerColor
+                    onPieceDrop   = handlePlayerMove
+                    arePiecesDraggable = (gameStatus == InProgress AND NOT isAIThinking)
+                )
+                EvalBar(lines = analysisLines)
+                AnalysisPanel(lines = analysisLines)
+                MoveHistory(moves = moveHistory)
+                Button "Resign" → handleResign (disabled if game over)
+
+
+// ── EvalBar  (visual evaluation indicator) ───────────────────
+COMPONENT EvalBar(lines: AnalysisLine[]):
+    latestScore = lines.last?.score OR 0
+    // Score in centipawns; clamp to [-1000, +1000] for display
+    // White portion height = (score + 1000) / 2000 * 100%
+    RENDER vertical bar split white/black by percentage
+
+
+// ── AnalysisPanel ─────────────────────────────────────────────
+COMPONENT AnalysisPanel(lines: AnalysisLine[]):
+    // Show each depth iteration as a row
+    FOR each line IN lines (sorted by depth descending):
+        RENDER row:
+            "Depth {line.depth}"
+            score formatted as "+{cp}" or "#{mateIn}" or "-{cp}"
+            "{line.nodes} nodes in {line.timeMs}ms"
+            PV moves in algebraic notation
+
+
+// ── MoveHistory ───────────────────────────────────────────────
+COMPONENT MoveHistory(moves: string[]):
+    // Group moves into pairs (white move + black move per row)
+    FOR index, move IN moves:
+        IF index % 2 == 0:
+            RENDER move-number label: "{index / 2 + 1}."
+        RENDER move in SAN or UCI notation
+    // Auto-scroll to latest move

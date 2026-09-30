@@ -1,0 +1,243 @@
+// ============================================================
+//  Chess.Engine.AI — Pseudo Code
+//  Covers: TranspositionTable, Evaluation, Search
+// ============================================================
+
+
+// ── TranspositionTable ───────────────────────────────────────
+ENUM TTFlag:
+    Exact       // score is exact
+    LowerBound  // score is at least this (beta cut-off stored)
+    UpperBound  // score is at most this (alpha cut-off stored)
+
+STRUCT TTEntry:
+    hash  : uint64
+    depth : int
+    score : int
+    flag  : TTFlag
+    move  : Move    // best move found at this node
+
+CLASS TranspositionTable:
+    SIZE = 2^23             // 8,388,608 entries
+    entries[SIZE] : TTEntry
+
+    FUNCTION Probe(hash: uint64, depth, alpha, beta) → (hit: bool, score: int, bestMove: Move):
+        entry = entries[hash % SIZE]
+        IF entry.hash != hash:
+            RETURN (false, 0, NullMove)
+        IF entry.depth >= depth:
+            score = AdjustMateScoreFromTT(entry.score)
+            IF entry.flag == Exact:
+                RETURN (true, score, entry.move)
+            IF entry.flag == LowerBound AND score >= beta:
+                RETURN (true, score, entry.move)
+            IF entry.flag == UpperBound AND score <= alpha:
+                RETURN (true, score, entry.move)
+        RETURN (false, 0, entry.move)   // move hint even on miss
+
+    FUNCTION Store(hash, depth, score, flag, move):
+        // Depth-preferred replacement: only overwrite if new depth >= stored depth
+        index = hash % SIZE
+        IF depth >= entries[index].depth OR entries[index].hash != hash:
+            entries[index] = TTEntry(hash, depth, AdjustMateScoreForTT(score), flag, move)
+
+    FUNCTION AdjustMateScoreForTT(score, ply):
+        // Shift mate-in-N scores by ply so they remain correct across TT hits
+        IF score > MateThreshold:  RETURN score + ply
+        IF score < -MateThreshold: RETURN score - ply
+        RETURN score
+
+    FUNCTION AdjustMateScoreFromTT(score, ply):
+        IF score > MateThreshold:  RETURN score - ply
+        IF score < -MateThreshold: RETURN score + ply
+        RETURN score
+
+
+// ── Evaluation ───────────────────────────────────────────────
+MODULE Evaluation:
+    // Material values (centipawns)
+    PIECE_VALUE = { Pawn:100, Knight:320, Bishop:330, Rook:500, Queen:900, King:20000 }
+
+    // Piece-square tables (PST) — 64-entry arrays, from white's perspective
+    // Separate tables for middlegame and endgame for each piece type
+    PST_MG[6][64] : int    // [piece_index][square]
+    PST_EG[6][64] : int
+
+    FUNCTION Evaluate(board: Board) → int:
+        // Returns score in centipawns relative to side to move (positive = good)
+        mgScore = 0
+        egScore = 0
+        phase   = 0      // 0 = endgame, 24 = full middlegame
+
+        FOR each piece on board:
+            sign = (+1 if white, -1 if black)
+            pstSquare = (white ? square : MirrorSquare(square))
+            mgScore += sign * (PIECE_VALUE[piece] + PST_MG[piece][pstSquare])
+            egScore += sign * (PIECE_VALUE[piece] + PST_EG[piece][pstSquare])
+            phase   += PhaseWeight(piece)   // N/B=1, R=2, Q=4
+
+        // Taper between middlegame and endgame
+        phase     = MIN(phase, 24)
+        taperedScore = (mgScore * phase + egScore * (24 - phase)) / 24
+
+        taperedScore += EvaluatePawnStructure(board)
+        taperedScore += EvaluateKingSafety(board)
+
+        RETURN taperedScore * (board.isWhiteTurn ? +1 : -1)
+
+    FUNCTION EvaluatePawnStructure(board) → int:
+        score = 0
+        FOR each color:
+            sign = (+1 if white, -1 if black)
+            pawns = board.bitboards[PawnOf(color)]
+            // Doubled pawns: more than one pawn on same file → penalty
+            // Isolated pawns: no friendly pawn on adjacent files → penalty
+            // Passed pawns: no enemy pawn can block or capture → bonus (scales by rank)
+        RETURN score
+
+    FUNCTION EvaluateKingSafety(board) → int:
+        score = 0
+        FOR each color:
+            sign = (+1 if white, -1 if black)
+            kingSq = LSB(board.bitboards[KingOf(color)])
+            // Count enemy attacks near king
+            // Penalty proportional to number of attackers and attack weight
+            // In endgame: bonus for king centralization instead
+        RETURN score
+
+
+// ── Search ───────────────────────────────────────────────────
+CLASS Search:
+    MAX_DEPTH   = 30
+    MAX_TIME_MS = 60,000
+    ASPIRATION_WINDOW = 50    // centipawns
+
+    killerMoves[MAX_DEPTH][2] : Move   // 2 killers per ply
+    history[2][64][64]        : int    // [color][from][to] — history heuristic
+    pvTable[MAX_DEPTH][MAX_DEPTH] : Move  // principal variation
+
+    EVENT SearchProgress(depth, score, nodes, timeMs, pv: string)
+
+    FUNCTION FindBestMove(board: Board, maxDepth: int, maxTimeMs: int) → Move:
+        bestMove  = NullMove
+        score     = Evaluate(board)
+        startTime = Now()
+
+        FOR depth = 1 TO maxDepth:
+            IF Elapsed(startTime) >= maxTimeMs: BREAK
+
+            // Aspiration windows
+            alpha = score - ASPIRATION_WINDOW
+            beta  = score + ASPIRATION_WINDOW
+
+            LOOP:
+                result = AlphaBeta(board, depth, alpha, beta, 0, startTime, maxTimeMs)
+                IF result <= alpha:
+                    alpha -= ASPIRATION_WINDOW * 2   // widen low
+                ELSE IF result >= beta:
+                    beta  += ASPIRATION_WINDOW * 2   // widen high
+                ELSE:
+                    score = result; BREAK
+
+            bestMove = pvTable[0][0]
+            EMIT SearchProgress(depth, score, nodes, Elapsed(startTime), ExtractPV())
+
+        RETURN bestMove
+
+    FUNCTION AlphaBeta(board, depth, alpha, beta, ply, startTime, maxTimeMs) → int:
+        // Time check
+        IF Elapsed(startTime) >= maxTimeMs: RETURN 0
+
+        // Transposition table probe
+        (hit, ttScore, ttMove) = TT.Probe(board.zobristHash, depth, alpha, beta)
+        IF hit: RETURN ttScore
+
+        // Leaf node
+        IF depth == 0: RETURN QuiescenceSearch(board, alpha, beta, ply)
+
+        // Checkmate / stalemate detection
+        moves = MoveGenerator.GenerateLegalMoves(board)
+        IF moves.IsEmpty():
+            IF board.IsInCheck(board.turn): RETURN -MateScore + ply   // checkmate
+            RETURN 0                                                    // stalemate
+
+        // Move ordering
+        OrderMoves(moves, ttMove, ply)
+
+        originalAlpha = alpha
+        bestMove = NullMove
+        legalCount = 0
+
+        FOR each move IN moves:
+            board.MakeMove(move)
+            legalCount++
+
+            // Late Move Reduction
+            reduction = 0
+            IF depth >= 3 AND legalCount > 4 AND NOT IsCapture(move) AND NOT IsPromotion(move):
+                reduction = 1 + (legalCount > 10 ? 1 : 0)
+
+            score = -AlphaBeta(board, depth - 1 - reduction, -beta, -alpha, ply + 1, startTime, maxTimeMs)
+
+            // Re-search at full depth if LMR raised alpha
+            IF reduction > 0 AND score > alpha:
+                score = -AlphaBeta(board, depth - 1, -beta, -alpha, ply + 1, startTime, maxTimeMs)
+
+            board.UndoMove(move)
+
+            IF score > alpha:
+                alpha    = score
+                bestMove = move
+                UpdatePV(ply, move)
+
+                // Killer and history heuristics (for quiet moves)
+                IF NOT IsCapture(move):
+                    UpdateKillers(move, ply)
+                    history[board.turn][move.From][move.To] += depth * depth
+
+            IF alpha >= beta:
+                // Beta cut-off
+                TT.Store(board.zobristHash, depth, beta, LowerBound, move)
+                RETURN beta
+
+        // Store in TT
+        flag = (alpha > originalAlpha) ? Exact : UpperBound
+        TT.Store(board.zobristHash, depth, alpha, flag, bestMove)
+        RETURN alpha
+
+    FUNCTION QuiescenceSearch(board, alpha, beta, ply) → int:
+        // Only search captures to reach a "quiet" position
+        standPat = Evaluate(board)
+        IF standPat >= beta: RETURN beta
+        IF standPat > alpha: alpha = standPat
+
+        captures = GenerateCaptures(board)
+        OrderCaptures(captures)      // MVV-LVA (Most Valuable Victim – Least Valuable Attacker)
+
+        FOR each move IN captures:
+            board.MakeMove(move)
+            score = -QuiescenceSearch(board, -beta, -alpha, ply + 1)
+            board.UndoMove(move)
+
+            IF score >= beta: RETURN beta
+            IF score > alpha: alpha = score
+
+        RETURN alpha
+
+    FUNCTION OrderMoves(moves, ttMove, ply):
+        // Score each move for ordering (higher = searched first):
+        //   TT best move                → 10,000,000
+        //   Captures (by MVV-LVA)       → 1,000,000 + victim_value - attacker_value/10
+        //   Killer move slot 0          → 900,000
+        //   Killer move slot 1          → 800,000
+        //   History heuristic           → history[from][to]
+        //   Quiet moves (fallback)      → 0
+        Sort moves descending by score
+
+    FUNCTION UpdateKillers(move, ply):
+        IF move != killerMoves[ply][0]:
+            killerMoves[ply][1] = killerMoves[ply][0]
+            killerMoves[ply][0] = move
+
+    FUNCTION ExtractPV() → string:
+        // Read pvTable[0][0..n] and convert moves to algebraic notation

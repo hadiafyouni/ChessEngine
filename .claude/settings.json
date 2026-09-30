@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python generate_pdf.py)",
+      "Bash(Start-Process \"C:\\\\Users\\\\PC\\\\Chess.API\\\\Chess_API_Overview.pdf\")",
+      "PowerShell(Start-Process \"C:\\\\Users\\\\PC\\\\Chess.API\\\\Chess_API_Overview.pdf\")"
+    ]
+  }
+}

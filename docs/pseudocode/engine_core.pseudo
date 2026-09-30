@@ -1,0 +1,206 @@
+// ============================================================
+//  Chess.Engine.Core — Pseudo Code
+//  Covers: PieceType, Move, Board, Bitboards, MoveGenerator,
+//          Zobrist, BoardState
+// ============================================================
+
+
+// ── PieceType ────────────────────────────────────────────────
+ENUM PieceType:
+    None
+    WhitePawn, WhiteKnight, WhiteBishop, WhiteRook, WhiteQueen, WhiteKing
+    BlackPawn, BlackKnight, BlackBishop, BlackRook, BlackQueen, BlackKing
+
+
+// ── Move (32-bit packed integer) ─────────────────────────────
+STRUCT Move:
+    // Packed layout:
+    //   bits  0–5   from square   (0–63)
+    //   bits  6–11  to square     (0–63)
+    //   bits 12–15  flag          (see MoveFlag enum)
+    //   bits 16–19  captured piece
+    //   bits 20–23  promotion piece
+    value: uint32
+
+    PROPERTY From        → (value >> 0)  & 0x3F
+    PROPERTY To          → (value >> 6)  & 0x3F
+    PROPERTY Flag        → (value >> 12) & 0x0F
+    PROPERTY Captured    → (value >> 16) & 0x0F
+    PROPERTY Promotion   → (value >> 20) & 0x0F
+
+ENUM MoveFlag:
+    Quiet, DoublePush, KingsideCastle, QueensideCastle,
+    Capture, EnPassant,
+    KnightPromo, BishopPromo, RookPromo, QueenPromo,
+    KnightPromoCapture, BishopPromoCapture, RookPromoCapture, QueenPromoCapture
+
+
+// ── BoardState (snapshot for undo) ───────────────────────────
+STRUCT BoardState:
+    castlingRights   : uint8    // 4 bits: KQkq
+    enPassantSquare  : int      // -1 if none
+    halfMoveClock    : int
+    capturedPiece    : PieceType
+    zobristHash      : uint64
+
+
+// ── Board ────────────────────────────────────────────────────
+CLASS Board:
+    // State
+    bitboards[12]   : uint64    // one per PieceType (index = enum value)
+    whitePieces     : uint64    // union of all white bitboards
+    blackPieces     : uint64    // union of all black bitboards
+    allPieces       : uint64    // whitePieces | blackPieces
+    mailbox[64]     : PieceType // square → piece (for fast lookup)
+    isWhiteTurn     : bool
+    castlingRights  : uint8
+    enPassantSquare : int
+    halfMoveClock   : int
+    fullMoveNumber  : int
+    zobristHash     : uint64
+    history         : Stack<BoardState>
+
+    FUNCTION LoadFEN(fen: string):
+        // Reset all bitboards and mailbox
+        // Parse piece placement (rank 8 → rank 1, files a → h)
+        // Set active color, castling rights, en-passant square
+        // Set half-move clock and full-move number
+        // Recompute occupancy bitboards
+        // Compute initial Zobrist hash from scratch
+
+    FUNCTION MakeMove(move: Move):
+        // 1. Save current state to history stack
+        // 2. Remove piece from 'from' square in bitboard and mailbox
+        // 3. Handle captures: remove captured piece from its bitboard
+        // 4. Handle en-passant: remove pawn from capture square
+        // 5. Place piece on 'to' square
+        // 6. Handle promotions: replace pawn with promoted piece
+        // 7. Handle castling: move rook to its target square
+        // 8. Update castling rights (moving king or rook revokes rights)
+        // 9. Update en-passant square (set on double push, clear otherwise)
+        // 10. Update half-move clock (reset on capture/pawn move)
+        // 11. Flip turn; increment full-move counter if black just moved
+        // 12. Update Zobrist hash incrementally
+
+    FUNCTION UndoMove(move: Move):
+        // 1. Restore saved BoardState from history stack
+        // 2. Move piece back from 'to' to 'from'
+        // 3. Restore captured piece (including en-passant pawn)
+        // 4. Undo promotion: replace promoted piece with pawn
+        // 5. Undo castling rook move
+        // 6. Restore occupancy bitboards
+
+    FUNCTION IsInCheck(color: Color) → bool:
+        kingSquare = LSB(bitboards[KingOf(color)])
+        RETURN IsSquareAttackedBy(kingSquare, opponent(color))
+
+    FUNCTION IsSquareAttackedBy(square: int, color: Color) → bool:
+        // Check if any piece of 'color' attacks 'square'
+        // Use precomputed attack tables for each piece type
+
+
+// ── Bitboards ────────────────────────────────────────────────
+MODULE Bitboards:
+    // Precomputed tables (filled at startup)
+    knightAttacks[64]     : uint64
+    kingAttacks[64]       : uint64
+    pawnAttacks[2][64]    : uint64    // [color][square]
+    rookMasks[64]         : uint64    // relevant occupancy bits
+    bishopMasks[64]       : uint64
+    rookMagics[64]        : uint64    // magic numbers (Romstad constants)
+    bishopMagics[64]      : uint64
+    rookAttackTable       : uint64[]  // indexed by magic hash
+    bishopAttackTable     : uint64[]
+
+    FUNCTION InitializeAttackTables():
+        // Fill knight and king tables by hand (fixed offsets)
+        // Fill pawn tables (one step diagonally per color)
+        // For each square, generate rook/bishop blocker subsets,
+        //   compute attacks for each subset, store at magic hash index
+
+    FUNCTION RookAttacks(square: int, occupied: uint64) → uint64:
+        index = (occupied & rookMasks[square]) * rookMagics[square] >> (64 - rookBits[square])
+        RETURN rookAttackTable[square][index]
+
+    FUNCTION BishopAttacks(square: int, occupied: uint64) → uint64:
+        index = (occupied & bishopMasks[square]) * bishopMagics[square] >> (64 - bishopBits[square])
+        RETURN bishopAttackTable[square][index]
+
+    FUNCTION QueenAttacks(square, occupied) → uint64:
+        RETURN RookAttacks(square, occupied) | BishopAttacks(square, occupied)
+
+    FUNCTION LSB(bb: uint64) → int:        // index of lowest set bit
+    FUNCTION PopLSB(bb: uint64) → int:     // return LSB index, clear it in bb
+    FUNCTION PopCount(bb: uint64) → int:   // count set bits
+
+
+// ── Zobrist ──────────────────────────────────────────────────
+MODULE Zobrist:
+    pieceKeys[12][64] : uint64    // random key per (piece, square)
+    sideKey           : uint64    // XOR when it is black's turn
+    castlingKeys[16]  : uint64    // one per castling-rights bitmask
+    enPassantKeys[8]  : uint64    // one per file
+
+    FUNCTION Initialize():
+        // Fill all tables with pseudo-random uint64 values
+        // (deterministic seed so hash is reproducible)
+
+    FUNCTION ComputeHash(board: Board) → uint64:
+        hash = 0
+        FOR each piece on board:
+            hash ^= pieceKeys[piece][square]
+        IF board.isWhiteTurn == false:
+            hash ^= sideKey
+        hash ^= castlingKeys[board.castlingRights]
+        IF board.enPassantSquare != -1:
+            hash ^= enPassantKeys[File(board.enPassantSquare)]
+        RETURN hash
+
+
+// ── MoveGenerator ────────────────────────────────────────────
+CLASS MoveGenerator:
+    FUNCTION GenerateLegalMoves(board: Board) → List<Move>:
+        pseudoLegal = GeneratePseudoLegalMoves(board)
+        legal = []
+        FOR each move IN pseudoLegal:
+            board.MakeMove(move)
+            IF NOT board.IsInCheck(board.previousTurn):
+                legal.Add(move)
+            board.UndoMove(move)
+        RETURN legal
+
+    FUNCTION GeneratePseudoLegalMoves(board: Board) → List<Move>:
+        moves = []
+        GeneratePawnMoves(board, moves)
+        GenerateKnightMoves(board, moves)
+        GenerateBishopMoves(board, moves)
+        GenerateRookMoves(board, moves)
+        GenerateQueenMoves(board, moves)
+        GenerateKingMoves(board, moves)     // includes castling
+        RETURN moves
+
+    FUNCTION GeneratePawnMoves(board, moves):
+        pawns = board.bitboards[PawnOf(board.turn)]
+        WHILE pawns != 0:
+            sq = PopLSB(pawns)
+            // Single push (if target square is empty)
+            // Double push from starting rank (if both squares empty)
+            // Diagonal captures (attack table & enemy pieces)
+            // En-passant capture (if enPassantSquare is in attack set)
+            // Promotions when reaching back rank (4 piece choices × capture/quiet)
+
+    FUNCTION GenerateSlidingMoves(board, moves, pieceType):
+        pieces = board.bitboards[pieceType]
+        WHILE pieces != 0:
+            sq = PopLSB(pieces)
+            attacks = AttacksFor(pieceType, sq, board.allPieces)
+            attacks &= NOT board.friendlyPieces   // can't capture own pieces
+            // Split into captures and quiet moves by masking with enemyPieces
+
+    FUNCTION GenerateKingMoves(board, moves):
+        sq = LSB(board.bitboards[KingOf(board.turn)])
+        // Normal king moves (king attack table minus friendly squares)
+        // Castling:
+        //   Kingside: rights set AND squares between king and rook empty
+        //             AND king not in check AND doesn't pass through check
+        //   Queenside: same checks on the queenside

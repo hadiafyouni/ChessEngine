@@ -1,0 +1,227 @@
+// ============================================================
+//  Chess.API — Pseudo Code
+//  Covers: Program startup, GameController, EngineController,
+//          EngineHub (SignalR), ApiModels
+// ============================================================
+
+
+// ── API Models (DTOs) ────────────────────────────────────────
+STRUCT StartGameRequest:
+    playerColor : string    // "white" | "black"
+
+STRUCT StartGameResponse:
+    gameId       : string
+    fen          : string   // starting position
+    playerColor  : string
+    status       : string   // "InProgress"
+
+STRUCT MakeMoveRequest:
+    gameId : string
+    move   : string         // UCI notation e.g. "e2e4", "e7e8q"
+
+STRUCT MakeMoveResponse:
+    fen        : string     // position after player move
+    aiMove     : string     // UCI move the AI played (null if game over)
+    aiFen      : string     // position after AI move
+    status     : GameStatus
+    moveHistory : List<string>
+
+STRUCT GameStateResponse:
+    gameId      : string
+    fen         : string
+    status      : GameStatus
+    playerColor : string
+    moveHistory : List<string>
+
+STRUCT EngineAnalysisRequest:
+    fen    : string
+    depth  : int    // default 20
+    timeMs : int    // default 5000
+
+STRUCT EvaluationResponse:
+    score : int     // centipawns, positive = white advantage
+
+STRUCT BestMoveResponse:
+    move  : string
+    score : int
+
+ENUM GameStatus:
+    InProgress, Checkmate, Stalemate, Draw, Resigned
+
+
+// ── In-memory Game State ─────────────────────────────────────
+CLASS GameState:
+    id          : string
+    board       : Board
+    playerColor : Color
+    status      : GameStatus
+    moveHistory : List<string>
+
+
+// ── Program (startup / DI) ───────────────────────────────────
+PROGRAM Startup:
+    // Dependency injection
+    REGISTER TranspositionTable AS singleton   // shared across all searches
+    REGISTER Search AS transient              // new instance per request
+    REGISTER Controllers
+    REGISTER SignalR
+
+    // CORS
+    POLICY "default":
+        AllowAnyOrigin, AllowAnyMethod, AllowAnyHeader
+    POLICY "signalr":
+        AllowSpecificOrigins([...])
+        AllowCredentials()      // required for SignalR WebSocket handshake
+
+    // Middleware pipeline
+    UseHttpsRedirection
+    UseRouting
+    UseCors("default")
+    UseSwagger → /swagger
+    MapControllers → /api/*
+    MapHub<EngineHub> → /hubs/engine
+
+
+// ── GameController ───────────────────────────────────────────
+CLASS GameController:
+    games : ConcurrentDictionary<string, GameState>   // in-memory store
+
+    // POST /api/game/start
+    FUNCTION StartGame(req: StartGameRequest) → StartGameResponse:
+        gameId = GenerateGuid()
+        board  = new Board()
+        board.LoadFEN(StandardStartingFEN)
+        state  = GameState(gameId, board, ParseColor(req.playerColor), InProgress)
+        games[gameId] = state
+
+        IF req.playerColor == "black":
+            // Player wants to play black → AI plays first as white
+            aiMove = search.FindBestMove(board, depth=15, timeMs=5000)
+            board.MakeMove(aiMove)
+            state.moveHistory.Add(MoveToUCI(aiMove))
+
+        RETURN StartGameResponse(gameId, board.ToFEN(), req.playerColor, "InProgress")
+
+    // POST /api/game/move
+    FUNCTION MakeMove(req: MakeMoveRequest) → MakeMoveResponse:
+        state = games[req.gameId] OR RETURN 404
+
+        IF state.status != InProgress: RETURN 400 "Game is over"
+
+        move = ParseUCIMove(req.move, state.board)
+        IF move is invalid: RETURN 400 "Illegal move"
+
+        state.board.MakeMove(move)
+        state.moveHistory.Add(req.move)
+
+        // Check game-over after player move
+        status = DetermineGameStatus(state.board)
+        IF status != InProgress:
+            state.status = status
+            RETURN MakeMoveResponse(state.board.ToFEN(), null, null, status, state.moveHistory)
+
+        // AI responds
+        aiMove = search.FindBestMove(state.board, depth=15, timeMs=5000)
+        state.board.MakeMove(aiMove)
+        state.moveHistory.Add(MoveToUCI(aiMove))
+
+        status = DetermineGameStatus(state.board)
+        state.status = status
+
+        RETURN MakeMoveResponse(
+            playerFen   = FENBeforeAIMove,
+            aiMove      = MoveToUCI(aiMove),
+            aiFen       = state.board.ToFEN(),
+            status      = status,
+            moveHistory = state.moveHistory
+        )
+
+    // GET /api/game/{id}/state
+    FUNCTION GetState(id: string) → GameStateResponse:
+        state = games[id] OR RETURN 404
+        RETURN GameStateResponse(state)
+
+    // POST /api/game/{id}/resign
+    FUNCTION Resign(id: string) → GameStateResponse:
+        state = games[id] OR RETURN 404
+        state.status = Resigned
+        RETURN GameStateResponse(state)
+
+    FUNCTION DetermineGameStatus(board: Board) → GameStatus:
+        moves = MoveGenerator.GenerateLegalMoves(board)
+        IF moves.IsEmpty():
+            RETURN board.IsInCheck(board.turn) ? Checkmate : Stalemate
+        IF board.halfMoveClock >= 100: RETURN Draw    // 50-move rule
+        IF IsInsufficientMaterial(board): RETURN Draw
+        RETURN InProgress
+
+
+// ── EngineController ─────────────────────────────────────────
+CLASS EngineController:
+
+    // POST /api/engine/move
+    FUNCTION GetBestMove(req: EngineAnalysisRequest) → BestMoveResponse:
+        board = new Board()
+        board.LoadFEN(req.fen)
+        move  = search.FindBestMove(board, req.depth, req.timeMs)
+        score = Evaluate(board)    // static eval after best move
+        RETURN BestMoveResponse(MoveToUCI(move), score)
+
+    // POST /api/engine/evaluate
+    FUNCTION EvaluatePosition(req: EngineAnalysisRequest) → EvaluationResponse:
+        board = new Board()
+        board.LoadFEN(req.fen)
+        score = Evaluation.Evaluate(board)
+        RETURN EvaluationResponse(score)
+
+    // GET /api/engine/perft/{depth}
+    FUNCTION Perft(depth: int) → PerftResponse:
+        board = new Board()
+        board.LoadFEN(StandardStartingFEN)
+        count = PerftCount(board, depth)
+        RETURN PerftResponse(depth, count)
+
+    FUNCTION PerftCount(board: Board, depth: int) → long:
+        IF depth == 0: RETURN 1
+        moves = MoveGenerator.GenerateLegalMoves(board)
+        total = 0
+        FOR each move IN moves:
+            board.MakeMove(move)
+            total += PerftCount(board, depth - 1)
+            board.UndoMove(move)
+        RETURN total
+
+
+// ── EngineHub (SignalR) ───────────────────────────────────────
+CLASS EngineHub EXTENDS Hub:
+
+    // Client calls this to start an asynchronous search
+    FUNCTION FindBestMove(fen: string, depth: int, timeMs: int):
+        TRY:
+            board = new Board()
+            board.LoadFEN(fen)
+
+            // Wire up progress events → push to this SignalR connection
+            search.OnSearchProgress += (progressData) =>
+                Clients.Caller.SendAsync("searchProgress", progressData)
+
+            // Run search (blocks until time/depth limit)
+            bestMove = search.FindBestMove(board, depth, timeMs)
+
+            // Send final result
+            Clients.Caller.SendAsync("bestMove", {
+                move  : MoveToUCI(bestMove),
+                score : lastSearchScore
+            })
+
+        CATCH exception:
+            Clients.Caller.SendAsync("searchError", { message: exception.Message })
+
+    // searchProgress payload sent during search:
+    // {
+    //   depth  : int,
+    //   score  : int,       // centipawns
+    //   nodes  : long,
+    //   timeMs : long,
+    //   pv     : string     // principal variation in UCI notation
+    // }
