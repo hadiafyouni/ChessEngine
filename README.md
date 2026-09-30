@@ -2,7 +2,7 @@
 
 A full-stack chess application built around a chess engine written from scratch in C#. The engine uses magic bitboards and an alpha-beta search. An ASP.NET Core API serves it over REST and SignalR, and a React + TypeScript frontend lets you play against it and watch its analysis live.
 
-<!-- Add a screenshot or GIF of the UI here: ![Screenshot](docs/screenshot.png) -->
+![Playing against the engine with live analysis](docs/screenshot.png)
 
 ## Highlights
 
@@ -165,3 +165,7 @@ This is a learning and portfolio project that runs locally. It isn't hardened fo
 ## Documentation
 
 `docs/` contains an architecture overview ([PDF](docs/Chess_API_Overview.pdf), [PPTX](docs/ChessEngineArchitecture.pptx)) and pseudocode for each layer.
+
+## License
+
+[MIT](LICENSE)
