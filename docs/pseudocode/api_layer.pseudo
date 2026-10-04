@@ -77,7 +77,8 @@ PROGRAM Startup:
     UseHttpsRedirection
     UseRouting
     UseCors("default")
-    UseSwagger → /swagger
+    MapOpenApi → /openapi/v1.json
+    MapScalarApiReference → /scalar
     MapControllers → /api/*
     MapHub<EngineHub> → /hubs/engine
 

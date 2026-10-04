@@ -1,3 +1,4 @@
+using Scalar.AspNetCore;
 using Chess.Engine.AI;
 using Chess.API.Hubs;
 
@@ -14,15 +15,15 @@ builder.Services.AddTransient<Search>(sp =>
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
 
-// Swagger / OpenAPI
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(options =>
+// OpenAPI document (served at /openapi/v1.json, browsed via Scalar)
+builder.Services.AddOpenApi(options =>
 {
-    options.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+    options.AddDocumentTransformer((document, _, _) =>
     {
-        Title = "Chess Engine API",
-        Version = "v1",
-        Description = "REST + SignalR API for the Chess Engine"
+        document.Info.Title = "Chess Engine API";
+        document.Info.Version = "v1";
+        document.Info.Description = "REST + SignalR API for the Chess Engine";
+        return Task.CompletedTask;
     });
 });
 
@@ -52,12 +53,8 @@ var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
 {
-    app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Chess Engine API v1");
-        c.RoutePrefix = "swagger";
-    });
+    app.MapOpenApi();
+    app.MapScalarApiReference(options => options.WithTitle("Chess Engine API"));
 }
 
 app.UseHttpsRedirection();

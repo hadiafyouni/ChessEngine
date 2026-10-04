@@ -696,11 +696,11 @@ function codeBox(s, code, x, y, w, h) {
 // SLIDE 15 – Architecture Map
 // ─────────────────────────────────────────────────────────────────────────────
 {
-  const s = slide("Project Architecture", "C# .NET 8 solution — four layers, clean separation");
+  const s = slide("Project Architecture", "C# .NET 10 solution — four layers, clean separation");
 
   const boxes = [
     { x: 0.5,  y: 1.45, w: 2.8, h: 5.2, label: "chess-ui\n(React / TS)",    color: C.accent2, items: ["App.tsx", "gameApi.ts", "engineHub.ts", "react-chessboard"] },
-    { x: 3.7,  y: 1.45, w: 2.8, h: 5.2, label: "Chess.API\n(ASP.NET 8)",    color: C.accent,  items: ["GameController.cs", "SignalR Hub", "appsettings.json", "Program.cs"] },
+    { x: 3.7,  y: 1.45, w: 2.8, h: 5.2, label: "Chess.API\n(ASP.NET 10)",    color: C.accent,  items: ["GameController.cs", "SignalR Hub", "appsettings.json", "Program.cs"] },
     { x: 6.9,  y: 1.45, w: 2.8, h: 5.2, label: "Chess.Engine.AI\n(Search)", color: C.yellow,  items: ["Search.cs", "MoveOrderer.cs", "TransposTable.cs", "Evaluation.cs"] },
     { x: 10.1, y: 1.45, w: 2.8, h: 5.2, label: "Chess.Engine.Core\n(Rules)",color: C.green,   items: ["Board.cs", "MoveGenerator.cs", "ZobristHash.cs", "Move.cs"] },
   ];

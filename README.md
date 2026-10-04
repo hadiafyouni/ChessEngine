@@ -33,8 +33,8 @@ A full-stack chess application built around a chess engine written from scratch 
 
 | Layer       | Technology                                   |
 |-------------|----------------------------------------------|
-| Engine      | C# 12 / .NET 8                               |
-| API         | ASP.NET Core 8, SignalR, Swagger (Swashbuckle) |
+| Engine      | C# 14 / .NET 10                              |
+| API         | ASP.NET Core 10, SignalR, OpenAPI + Scalar    |
 | Frontend    | React 19, TypeScript, Vite                   |
 | Board UI    | react-chessboard, chess.js                   |
 | Tests       | xUnit                                        |
@@ -43,7 +43,7 @@ A full-stack chess application built around a chess engine written from scratch 
 
 ### Prerequisites
 
-- [.NET 8 SDK](https://dotnet.microsoft.com/download) or newer
+- [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - [Node.js 20+](https://nodejs.org/)
 
 ### 1. Run the API
@@ -54,7 +54,7 @@ From the repository root:
 dotnet run --project Chess.API
 ```
 
-The API listens on `http://localhost:5241`. Swagger UI is at <http://localhost:5241/swagger> in the Development environment.
+The API listens on `http://localhost:5241`. In the Development environment, interactive API docs (Scalar) are at <http://localhost:5241/scalar> and the raw OpenAPI document is at `/openapi/v1.json`.
 
 ### 2. Run the frontend
 
