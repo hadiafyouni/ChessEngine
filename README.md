@@ -1,3 +1,6 @@
+> [!NOTE]
+> This project was developed locally in April 2026 and published to GitHub afterwards, so the commit history here doesn't reflect how it was built.
+
 # Chess Engine
 
 A full-stack chess application built around a chess engine written from scratch in C#. The engine uses magic bitboards and an alpha-beta search. An ASP.NET Core API serves it over REST and SignalR, and a React + TypeScript frontend lets you play against it and watch its analysis live.
